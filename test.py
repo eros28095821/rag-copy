@@ -10,7 +10,7 @@ from langchain.callbacks.manager import CallbackManager
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 from sentence_transformers import SentenceTransformer
 # 初始化Ollama模型
-model = SentenceTransformer('all-MiniLM-L6-v2')
+llm = Ollama(model='gemma2:2b', callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]))
 
 # 建立文件列表，每個文件包含一段文字內容
 docs = [
@@ -23,7 +23,7 @@ text_splitter = CharacterTextSplitter(chunk_size=20, chunk_overlap=5)
 documents = text_splitter.split_documents(docs)  # 將文件分割成更小的部分
 
 # 初始化嵌入模型
-embeddings = OllamaEmbeddings(model="all-MiniLM-L6-v2")
+embeddings = OllamaEmbeddings(model="nomic-embed-text:latest")
 
 # 使用FAISS建立向量資料庫
 vectordb = FAISS.from_documents(docs, embeddings)
@@ -37,7 +37,7 @@ prompt = ChatPromptTemplate.from_messages([
 ])
 
 # 創建文件鏈，將llm和提示模板結合
-document_chain = create_stuff_documents_chain(model, prompt)
+document_chain = create_stuff_documents_chain(llm, prompt)
 
 # 創建檢索鏈，將檢索器和文件鏈結合
 retrieval_chain = create_retrieval_chain(retriever, document_chain)
