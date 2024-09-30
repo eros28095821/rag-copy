@@ -56,5 +56,3 @@ while input_text.lower() != 'bye':
     print("-------------------")
     print(response['context'])
     input_text = input('>>> ')
-
-# test
