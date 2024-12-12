@@ -1,90 +1,107 @@
-from operator import itemgetter
-import ollama
-from dotenv import load_dotenv
+import chainlit as cl
+from langchain.memory import ConversationBufferMemory
+from langchain_community.llms import Ollama
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.schema.output_parser import StrOutputParser
 from langchain.schema.runnable import Runnable, RunnablePassthrough, RunnableLambda
 from langchain.schema.runnable.config import RunnableConfig
-from langchain.memory import ConversationBufferMemory
+from operator import itemgetter
+from langchain.schema import HumanMessage, AIMessage
 
-from chainlit.types import ThreadDict
-import chainlit as cl
+# 全域變數儲存歷史對話
+global_history = []
 
-load_dotenv()  # 加载 .env 配置
-
-# 设置 Runnable
+# 初始化模型
 def setup_runnable():
-    memory = cl.user_session.get("memory")  # type: ConversationBufferMemory
-    # 设置 Ollama 模型
-    model = "kenneth85/llama-3-taiwan:8b-instruct"  # 选择 Ollama 模型
-    client = ollama  # 使用 Ollama 客户端
-
-    # 创建一个简单的 prompt 模板
+    memory = cl.user_session.get("memory")  # 獲取目前的記憶體對象
+    model = Ollama(model="kenneth85/llama-3-taiwan:8b-instruct")  # 替換為 Ollama 模型
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", "You are a helpful chatbot"),
+            ("system", "你是一個樂於助人的聊天機器人。"),
+            MessagesPlaceholder(variable_name="history"),
             ("human", "{question}"),
         ]
     )
 
-    # 获取历史记录并将其转换为字符串
-    history = memory.load_memory_variables({"question": ""})  # 必须传递 `inputs` 参数，这里传递空字典或问题
-    history_str = "\n".join([msg["content"] for msg in history.get("history", [])])
-
-    # 格式化 prompt，并传递历史记录
-    prompt_with_history = prompt.format(question="{question}", history=history_str)
-
-    # 设置可执行流程
     runnable = (
         RunnablePassthrough.assign(
             history=RunnableLambda(memory.load_memory_variables) | itemgetter("history")
         )
-        | prompt_with_history  # 使用已经格式化的 prompt
-        | client.chat  # 使用 Ollama 客户端的 chat 方法
-        | StrOutputParser()
+        | prompt
+        | model
     )
     cl.user_session.set("runnable", runnable)
 
-# 用户身份验证
-@cl.password_auth_callback
-def auth():
-    return cl.User(identifier="test")
-
-# 当用户开始聊天时
+# 啟動時初始化
 @cl.on_chat_start
 async def on_chat_start():
-    cl.user_session.set("memory", ConversationBufferMemory(return_messages=True))  # 创建一个新的聊天内存
-    setup_runnable()  # 设置可执行的聊天流程
+    cl.user_session.set("memory", ConversationBufferMemory(return_messages=True))
+    setup_runnable()
 
-# 当用户恢复聊天时
-@cl.on_chat_resume
-async def on_chat_resume(thread: ThreadDict):
-    memory = ConversationBufferMemory(return_messages=True)  # 创建一个新的聊天内存
-    root_messages = [m for m in thread["steps"] if m["parentId"] == None]
-    for message in root_messages:
-        if message["type"] == "user_message":
-            memory.chat_memory.add_user_message(message["output"])
-        else:
-            memory.chat_memory.add_ai_message(message["output"])
+    # 提供操作選單
+    await cl.Message(
+        content=(
+            "歡迎使用聊天機器人！\n"
+            "請輸入以下選項進行操作：\n"
+            "new_chat - 開啟新對話\n"
+            "view_history - 查看歷史對話"
+        )
+    ).send()
 
-    cl.user_session.set("memory", memory)  # 设置新的聊天内存
-    setup_runnable()  # 设置可执行的聊天流程
-
-# 当用户发送消息时
+# 處理訊息
 @cl.on_message
 async def on_message(message: cl.Message):
-    memory = cl.user_session.get("memory")  # type: ConversationBufferMemory
-    runnable = cl.user_session.get("runnable")  # type: Runnable
+    global global_history
 
-    res = cl.Message(content="")
+    memory = cl.user_session.get("memory")
+    runnable = cl.user_session.get("runnable")
 
-    async for chunk in runnable.astream(
-        {"question": message.content},
-        config=RunnableConfig(callbacks=[cl.LangchainCallbackHandler()]),
-    ):
-        await res.stream_token(chunk)  # 实时返回流式数据
+    # 根據用戶輸入進行操作
+    if message.content.strip() == "new_chat":
+        # 保存目前對話到歷史
+        if memory.chat_memory.messages:
+            global_history.append(memory.chat_memory.messages)
 
-    await res.send()  # 发送回应
+        # 清除上下文，開啟新對話
+        cl.user_session.set("memory", ConversationBufferMemory(return_messages=True))
+        setup_runnable()
 
-    memory.chat_memory.add_user_message(message.content)  # 将用户消息添加到内存
-    memory.chat_memory.add_ai_message(res.content)  # 将模型回复添加到内存
+        await cl.Message(content="新對話已啟動！").send()
+
+    elif message.content.strip() == "view_history":
+        # 顯示所有歷史對話
+         # **打印原始 global_history 到終端**
+        print("\n=== Global History (Raw Structure) ===")
+        print(global_history)
+        print("=== End of Global History ===\n")
+
+        # 顯示所有歷史對話
+        if not global_history:
+            await cl.Message(content="目前沒有歷史對話記錄。").send()
+        else:
+            for i, history in enumerate(global_history, start=1):
+                history_text = []
+                for msg in history:
+                    # 判斷訊息角色
+                    if isinstance(msg, HumanMessage):
+                        role = "用戶"
+                    elif isinstance(msg, AIMessage):
+                        role = "AI"
+                    else:
+                        role = "未知角色"  # 預防其他情況
+                    history_text.append(f"**{role}：** {msg.content}")
+                await cl.Message(content=f"### 歷史對話 {i}\n" + "\n".join(history_text)).send()
+
+    else:
+        # 處理用戶輸入作為對話
+        res = cl.Message(content="")
+        async for chunk in runnable.astream(
+            {"question": message.content},
+            config=RunnableConfig(callbacks=[cl.LangchainCallbackHandler()]),
+        ):
+            await res.stream_token(chunk)
+        await res.send()
+
+        # 儲存對話記錄
+         # 儲存對話記錄
+        memory.chat_memory.add_user_message(HumanMessage(content=message.content))
+        memory.chat_memory.add_ai_message(AIMessage(content=res.content))
